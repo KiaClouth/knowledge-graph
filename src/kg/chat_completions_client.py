@@ -22,12 +22,19 @@
 from __future__ import annotations
 
 import json
+import os
 from typing import Any
 
 from graphiti_core.llm_client.config import LLMConfig
 from graphiti_core.llm_client.openai_base_client import BaseOpenAIClient
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, BadRequestError, UnprocessableEntityError
 from pydantic import BaseModel
+
+# Graphiti's own retry path (is_server_or_retry_error) only recognizes
+# httpx.HTTPStatusError, so it never retries the openai.InternalServerError(503)
+# the SDK raises when dasuapi briefly overloads — the run just crashes. Letting
+# AsyncOpenAI retry internally (it backs off on 408/409/429/5xx) is the backstop.
+DEFAULT_MAX_RETRIES = 5
 
 
 class ChatCompletionsClient(BaseOpenAIClient):
@@ -42,8 +49,9 @@ class ChatCompletionsClient(BaseOpenAIClient):
     ) -> None:
         super().__init__(config, cache=cache, max_tokens=max_tokens)
         cfg = config or LLMConfig()
+        max_retries = int(os.environ.get("OPENAI_MAX_RETRIES", DEFAULT_MAX_RETRIES))
         self.client: AsyncOpenAI = client or AsyncOpenAI(
-            api_key=cfg.api_key, base_url=cfg.base_url
+            api_key=cfg.api_key, base_url=cfg.base_url, max_retries=max_retries
         )
 
     async def _create_completion(
@@ -75,8 +83,11 @@ class ChatCompletionsClient(BaseOpenAIClient):
     ) -> Any:
         """Structured completion via chat.completions.
 
-        Tries strict json_schema first; on endpoints that don't support it,
-        falls back to json_object with the schema embedded in a system message.
+        Tries strict json_schema first. Only falls back to json_object (schema
+        embedded in a system message) when the endpoint rejects the json_schema
+        PARAMETER itself (400/422). Transient server errors (503/429/5xx) are
+        NOT caught here — they propagate so AsyncOpenAI's max_retries and
+        Graphiti's upper retry layer can handle them.
 
         Stashes the wrapper field name (if response_model is a single-list-field
         wrapper, as all Graphiti extraction models are) onto the returned object,
@@ -100,9 +111,14 @@ class ChatCompletionsClient(BaseOpenAIClient):
                     },
                 },
             )
-        except Exception:
-            # Fallback: many relays only support json_object. Inject the schema
-            # into the prompt so the model still emits conforming JSON.
+        except (BadRequestError, UnprocessableEntityError):
+            # Only fall back when the endpoint genuinely rejects the json_schema
+            # PARAMETER (400/422). Do NOT fall back on 503/429/5xx/timeouts —
+            # those are transient server errors that AsyncOpenAI(max_retries) has
+            # already retried inside this create() call; swallowing them here and
+            # retrying as json_object would (a) bypass that retry budget and
+            # (b) on dasuapi return prose, not JSON (probe ② fails), so the run
+            # crashes anyway. Let them propagate to Graphiti's upper retry layer.
             schema_hint = {
                 "role": "system",
                 "content": (

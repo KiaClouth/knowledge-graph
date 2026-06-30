@@ -114,7 +114,15 @@ async def main() -> int:
     from openai import AsyncOpenAI
 
     client = AsyncOpenAI(api_key=args.api_key, base_url=args.base_url or None)
-    print(f"端点: {args.base_url or '(官方默认)'}\n模型: {args.model}")
+    print("=" * 56)
+    print("Graphiti 端点适配性检测")
+    print(f"  端点: {args.base_url or '(OpenAI 官方默认)'}")
+    print(f"  模型: {args.model}")
+    print("=" * 56)
+    print(
+        "说明:Graphiti 抽取依赖『服务器端约束解码』(传 schema 后 API 强制\n"
+        "      输出合规)。下面第①档是决定性检验,②③仅供参考。"
+    )
 
     schema_ok = await _try(
         client,
@@ -123,21 +131,24 @@ async def main() -> int:
             "type": "json_schema",
             "json_schema": {"name": "ExtractedEntities", "schema": TARGET_SCHEMA, "strict": True},
         },
-        "1. json_schema + strict(Graphiti 最需要)",
+        "① json_schema strict  【决定性 · 只看这档】",
     )
     object_ok = await _try(
-        client, args.model, {"type": "json_object"}, "2. json_object(仅保证合法 JSON)"
+        client, args.model, {"type": "json_object"}, "② json_object        (参考,不影响结论)"
     )
-    await _try(client, args.model, None, "3. 裸 prompt(连通性参照)")
+    await _try(client, args.model, None, "③ 裸 prompt          (参考,连通性)")
 
-    print("\n" + "=" * 50)
-    print("结论(针对 Graphiti 适配性):")
+    print("\n" + "█" * 56)
     if schema_ok:
-        print("  ★ json_schema 严格模式可用 —— 最适合,直接能喂 Graphiti。")
-    elif object_ok:
-        print("  △ 仅 json_object 符合结构 —— 不稳定(靠模型自觉),换文本可能崩。")
+        print("结论:✅  可用 —— 该端点真正支持约束解码,能可靠喂 Graphiti。")
+        print("下一步:把 .env 的 OPENAI_BASE_URL/KEY/MODEL 指向它,跑 smoke_ingest.py。")
     else:
-        print("  ✗ 两种模式都不能稳定按 schema 输出 —— 不建议用于 Graphiti 抽取。")
+        why = "仅返回合法 JSON 但结构自创" if object_ok else "返回散文/Markdown,无视 schema"
+        print("结论:❌  不可用 —— 该端点只是『透传』schema 参数、不做约束解码")
+        print(f"        (第①档{why})。换别的端点再测。")
+        print("提示:OpenAI 官方必过;国产可试 qwen-max/plus 等(需实测)。")
+    print("█" * 56)
+    print(f"\n(诊断细节见上方三档;判定仅取决于第①档:{'通过' if schema_ok else '未通过'})")
     return 0 if schema_ok else 1
 
 

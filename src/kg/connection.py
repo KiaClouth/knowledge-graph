@@ -54,11 +54,19 @@ def _make_llm_client() -> ChatCompletionsClient:
     Uses ChatCompletionsClient (chat.completions) rather than Graphiti's default
     OpenAIClient (Responses API), because the configured relay/endpoint does not
     implement the Responses API. See chat_completions_client.py for the why.
+
+    small_model matters: Graphiti routes "simple" prompts (attribute extraction,
+    dedup) to LLMConfig.small_model, which DEFAULTS to "gpt-4.1-nano". Relays
+    like dasuapi don't serve that model and answer 503, so the run dies right
+    after entity/edge extraction. Pin small_model to the main model (override
+    via OPENAI_SMALL_MODEL only if the relay has a real cheaper model).
     """
+    main_model = os.environ.get("OPENAI_MODEL", DEFAULT_CHAT_MODEL)
     config = LLMConfig(
         api_key=os.environ.get("OPENAI_API_KEY"),
         base_url=os.environ.get("OPENAI_BASE_URL") or None,
-        model=os.environ.get("OPENAI_MODEL", DEFAULT_CHAT_MODEL),
+        model=main_model,
+        small_model=os.environ.get("OPENAI_SMALL_MODEL", main_model),
     )
     return ChatCompletionsClient(config=config)
 
