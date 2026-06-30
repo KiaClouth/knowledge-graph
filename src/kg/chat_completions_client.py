@@ -77,10 +77,16 @@ class ChatCompletionsClient(BaseOpenAIClient):
 
         Tries strict json_schema first; on endpoints that don't support it,
         falls back to json_object with the schema embedded in a system message.
+
+        Stashes the wrapper field name (if response_model is a single-list-field
+        wrapper, as all Graphiti extraction models are) onto the returned object,
+        so _handle_structured_response can re-wrap a bare-array response. Stored
+        per-response (not on self) to stay safe under Graphiti's concurrency.
         """
         schema = response_model.model_json_schema()
+        wrap_field = self._single_list_field(response_model)
         try:
-            return await self.client.chat.completions.create(
+            resp = await self.client.chat.completions.create(
                 model=model,
                 messages=messages,
                 temperature=temperature,
@@ -104,13 +110,31 @@ class ChatCompletionsClient(BaseOpenAIClient):
                     f"exactly to this JSON schema:\n{json.dumps(schema)}"
                 ),
             }
-            return await self.client.chat.completions.create(
+            resp = await self.client.chat.completions.create(
                 model=model,
                 messages=[schema_hint, *messages],
                 temperature=temperature,
                 max_tokens=max_tokens,
                 response_format={"type": "json_object"},
             )
+        # Attach for the parser; per-response so concurrent calls don't collide.
+        resp._kg_wrap_field = wrap_field  # type: ignore[attr-defined]
+        return resp
+
+    @staticmethod
+    def _single_list_field(response_model: type[BaseModel]) -> str | None:
+        """Return the field name if the model wraps exactly one list field, else None.
+
+        Graphiti's extraction models (ExtractedEntities/ExtractedEdges/...) each
+        wrap a single list field; that field name is the unambiguous target for
+        re-wrapping a bare-array response.
+        """
+        fields = response_model.model_fields
+        if len(fields) != 1:
+            return None
+        (name, field) = next(iter(fields.items()))
+        origin = getattr(field.annotation, "__origin__", None)
+        return name if origin in (list,) else None
 
     def _handle_structured_response(self, response: Any) -> tuple[dict[str, Any], int, int]:
         """Parse a chat.completions response (overrides the Responses-API parser).
@@ -118,6 +142,11 @@ class ChatCompletionsClient(BaseOpenAIClient):
         The base implementation reads response.output_text (Responses API). Our
         responses are chat.completions-shaped, so read choices[0].message.content
         and usage.prompt_tokens/completion_tokens instead.
+
+        Normalization: some models drop the single-field wrapper and emit a bare
+        JSON array instead of {"<field>": [...]}, which breaks Graphiti's
+        Model(**resp). If we know the wrapper field (stashed in
+        _create_structured_completion) and got a bare list, re-wrap it.
         """
         content = response.choices[0].message.content or ""
         input_tokens = 0
@@ -127,4 +156,9 @@ class ChatCompletionsClient(BaseOpenAIClient):
             output_tokens = getattr(response.usage, "completion_tokens", 0) or 0
         if not content:
             raise Exception(f"Invalid response from LLM: {response}")
-        return json.loads(content), input_tokens, output_tokens
+        parsed = json.loads(content)
+        if isinstance(parsed, list):
+            wrap_field = getattr(response, "_kg_wrap_field", None)
+            if wrap_field:
+                parsed = {wrap_field: parsed}
+        return parsed, input_tokens, output_tokens
