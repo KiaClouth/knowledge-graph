@@ -1,12 +1,9 @@
 """Connection-only healthcheck.
 
-Verifies the storage/engine layer works WITHOUT calling OpenAI by talking to the
-Kùzu driver directly (NOT through Graphiti, whose constructor eagerly builds an
-OpenAI client and would demand a key):
-  1. Kùzu creates an on-disk database.
-  2. The driver connects.
-  3. The Graphiti schema can be created on it.
-  4. A trivial structural query round-trips.
+Verifies the storage layer (Neo4j) is reachable WITHOUT calling the LLM/embedder:
+  1. Neo4jDriver connects (needs a running Neo4j — see docker-compose.yml).
+  2. The Graphiti schema/indices can be created.
+  3. A trivial structural query round-trips.
 
 Run:  uv run python scripts/healthcheck.py
 """
@@ -17,34 +14,34 @@ import asyncio
 import sys
 from pathlib import Path
 
-# Make `import kg` work when run as a script.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from kg.connection import make_driver, resolve_db_path  # noqa: E402
+from dotenv import load_dotenv  # noqa: E402
+
+load_dotenv()
+
+from kg.connection import make_driver  # noqa: E402
 
 
 async def main() -> int:
-    db_path = resolve_db_path()
-    print(f"[1/4] Kùzu DB path     : {db_path}")
-
-    driver = make_driver(db_path)
-    print("[2/4] KuzuDriver init    : ok (no OpenAI client involved)")
+    driver = make_driver()
+    print("[1/3] Neo4jDriver init   : ok (no LLM/embedder involved)")
 
     try:
-        driver.setup_schema()  # synchronous in KuzuDriver
-        print("[3/4] Schema setup       : ok")
-
         # Minimal structural read straight through the driver — proves the
-        # Kùzu connection is live without invoking any LLM extraction.
+        # Neo4j connection is live without invoking any LLM extraction.
         records, _, _ = await driver.execute_query("RETURN 1 AS ok")
         ok = records[0]["ok"] if records else None
         assert ok == 1, f"unexpected query result: {records!r}"
-        print(f"[4/4] Driver round-trip : ok (RETURN 1 -> {ok})")
+        print(f"[2/3] Driver round-trip : ok (RETURN 1 -> {ok})")
+
+        await driver.build_indices_and_constraints()
+        print("[3/3] Indices/schema    : ok")
     finally:
         await driver.close()
 
-    print("\nHEALTHCHECK PASSED — storage/engine layer is wired up.")
-    print("Next: add OPENAI_API_KEY to .env, then we build the ontology + ingest.")
+    print("\nHEALTHCHECK PASSED — Neo4j storage layer is reachable.")
+    print("Next: uv run python scripts/smoke_ingest.py  (real extraction).")
     return 0
 
 

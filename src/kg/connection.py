@@ -1,9 +1,16 @@
-"""Graphiti + Kùzu connection setup.
+"""Graphiti + Neo4j connection setup.
 
-This module only wires up the storage/engine layer. It deliberately does NOT
-configure an LLM or embedder by default, so it can be initialized (and the Kùzu
-schema created) without any API key. Extraction (which needs OpenAI) is added in
-a later step.
+Two factories:
+  - make_driver(): the storage layer alone (no LLM/embedder key needed, but it
+    DOES need a running Neo4j). Used by the connection-only healthcheck.
+  - make_graphiti(): a fully-configured Graphiti with chat LLM + embedder wired
+    independently. The LLM and embedder each get their own base_url/key/model,
+    because they often live on different endpoints (e.g. a cheap chat relay that
+    does NOT serve embeddings, plus a separate embedding provider).
+
+Backend note: Kùzu was dropped — it is deprecated in graphiti-core and its
+driver crashes on add_episode() with an explicit group_id (no _database attr).
+Neo4j runs via docker-compose.yml (bolt on :7687).
 """
 
 from __future__ import annotations
@@ -12,36 +19,75 @@ import os
 from pathlib import Path
 
 from graphiti_core import Graphiti
-from graphiti_core.driver.kuzu_driver import KuzuDriver
+from graphiti_core.driver.neo4j_driver import Neo4jDriver
+from graphiti_core.embedder.openai import OpenAIEmbedder, OpenAIEmbedderConfig
+from graphiti_core.llm_client.config import LLMConfig
+
+from kg.chat_completions_client import ChatCompletionsClient
 
 # group_id partitions (see README): Graphiti writes here atomically.
 DRAFT_GROUP = "draft"          # fully automatic extraction lands here
 CANONICAL_GROUP = "canonical"  # outward-facing truth; only via human-reviewed promotion
 
-DEFAULT_DB_PATH = "./data/graphiti.kuzu"
+DEFAULT_NEO4J_URI = "bolt://localhost:7687"
+DEFAULT_NEO4J_USER = "neo4j"
+DEFAULT_NEO4J_PASSWORD = "localdev_change_me"
+DEFAULT_CHAT_MODEL = "gpt-4o-mini"
+DEFAULT_EMBED_MODEL = "text-embedding-3-small"
+# Embedding dimension is baked into the graph schema on first write. Changing the
+# embedder later requires rebuilding. Read from env, never hardcode.
+DEFAULT_EMBED_DIM = 1536
 
 
-def resolve_db_path() -> str:
-    """Resolve the Kùzu DB path from env, defaulting to ./data/graphiti.kuzu."""
-    path = os.environ.get("KUZU_DB_PATH", DEFAULT_DB_PATH)
-    # Kùzu creates the database itself, but its parent directory must exist.
-    parent = Path(path).expanduser().resolve().parent
-    parent.mkdir(parents=True, exist_ok=True)
-    return path
+def make_driver() -> Neo4jDriver:
+    """Construct a Neo4jDriver from NEO4J_* env (matches docker-compose.yml)."""
+    return Neo4jDriver(
+        uri=os.environ.get("NEO4J_URI", DEFAULT_NEO4J_URI),
+        user=os.environ.get("NEO4J_USER", DEFAULT_NEO4J_USER),
+        password=os.environ.get("NEO4J_PASSWORD", DEFAULT_NEO4J_PASSWORD),
+    )
 
 
-def make_driver(db_path: str | None = None) -> KuzuDriver:
-    """Construct a KuzuDriver against a local on-disk database."""
-    return KuzuDriver(db=db_path or resolve_db_path())
+def _make_llm_client() -> ChatCompletionsClient:
+    """Chat LLM client from OPENAI_* env (supports a custom base_url relay).
 
-
-def make_graphiti(db_path: str | None = None) -> Graphiti:
-    """Build a Graphiti instance backed by Kùzu.
-
-    NOTE: Graphiti's constructor eagerly creates an OpenAIClient when no
-    llm_client is supplied, and AsyncOpenAI requires a key at construction time.
-    So this requires OPENAI_API_KEY to be set even before any extraction call.
-    Used by the real ingest step, NOT by the connection-only healthcheck — the
-    healthcheck talks to KuzuDriver directly (see make_driver) to stay key-free.
+    Uses ChatCompletionsClient (chat.completions) rather than Graphiti's default
+    OpenAIClient (Responses API), because the configured relay/endpoint does not
+    implement the Responses API. See chat_completions_client.py for the why.
     """
-    return Graphiti(graph_driver=make_driver(db_path))
+    config = LLMConfig(
+        api_key=os.environ.get("OPENAI_API_KEY"),
+        base_url=os.environ.get("OPENAI_BASE_URL") or None,
+        model=os.environ.get("OPENAI_MODEL", DEFAULT_CHAT_MODEL),
+    )
+    return ChatCompletionsClient(config=config)
+
+
+def _make_embedder() -> OpenAIEmbedder:
+    """Embedder from EMBEDDER_* env, falling back to OPENAI_* for key/base_url.
+
+    embedding_dim must match the endpoint's actual output (e.g. Zhipu
+    embedding-3 = 2048, OpenAI text-embedding-3-small = 1536), and is fixed into
+    the graph schema on first write.
+    """
+    config = OpenAIEmbedderConfig(
+        api_key=os.environ.get("EMBEDDER_API_KEY") or os.environ.get("OPENAI_API_KEY"),
+        base_url=os.environ.get("EMBEDDER_BASE_URL") or os.environ.get("OPENAI_BASE_URL") or None,
+        embedding_model=os.environ.get("EMBEDDER_MODEL", DEFAULT_EMBED_MODEL),
+        embedding_dim=int(os.environ.get("EMBEDDER_DIM", DEFAULT_EMBED_DIM)),
+    )
+    return OpenAIEmbedder(config=config)
+
+
+def make_graphiti() -> Graphiti:
+    """Build a fully-configured Graphiti backed by Neo4j.
+
+    Requires a running Neo4j (see docker-compose.yml) + OPENAI_API_KEY (chat).
+    Embedder uses EMBEDDER_* if set, else the OPENAI_* values. Run
+    scripts/probe_endpoint.py first to confirm both endpoints work.
+    """
+    return Graphiti(
+        graph_driver=make_driver(),
+        llm_client=_make_llm_client(),
+        embedder=_make_embedder(),
+    )

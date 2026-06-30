@@ -1,0 +1,21 @@
+services:
+  neo4j:
+    image: neo4j:5-community
+    container_name: kg-neo4j
+    ports:
+      - "7474:7474"   # HTTP browser UI
+      - "7687:7687"   # Bolt (driver connection)
+    environment:
+      # Password is read from your shell/.env (NEO4J_PASSWORD); falls back to a
+      # local-dev default. Override it for anything non-local.
+      NEO4J_AUTH: "neo4j/${NEO4J_PASSWORD:-localdev_change_me}"
+    volumes:
+      - kg_neo4j_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:7474 >/dev/null 2>&1 || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  kg_neo4j_data:

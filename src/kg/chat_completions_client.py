@@ -1,0 +1,130 @@
+"""走 chat.completions 的自定义 LLM client。
+
+为什么需要它:Graphiti 默认的 OpenAIClient 用 OpenAI 新的 Responses API
+(client.responses.parse)做结构化抽取。许多 OpenAI 兼容中转 / 国产端点
+(right.codes 中转、智谱等)只实现了老的 chat.completions、不提供 /responses
+端点,导致默认路径崩溃('str' object has no attribute 'output' 或 404)。
+
+本 client 继承 BaseOpenAIClient(它已实现 generate_response 等上层逻辑),只重写
+两个抽象方法,改用 chat.completions:
+  - _create_completion: 普通 JSON 输出(response_format=json_object)
+  - _create_structured_completion: 结构化输出。优先用 json_schema(更可靠);
+    若端点不支持,降级为 json_object + 把 schema 注入 system 提示。
+并重写 _handle_structured_response,按 chat.completions 的形状
+(choices[0].message.content)解析,而非 Responses API 的 output_text。
+
+参考契约(读自 graphiti-core 0.29.2 源码):
+  _generate_response 把 _create_structured_completion 的返回交给
+  _handle_structured_response;把 _create_completion 的返回交给
+  _handle_json_response(读 choices[0].message.content / usage.prompt_tokens)。
+"""
+
+from __future__ import annotations
+
+import json
+from typing import Any
+
+from graphiti_core.llm_client.config import LLMConfig
+from graphiti_core.llm_client.openai_base_client import BaseOpenAIClient
+from openai import AsyncOpenAI
+from pydantic import BaseModel
+
+
+class ChatCompletionsClient(BaseOpenAIClient):
+    """OpenAI-compatible client that uses chat.completions instead of Responses."""
+
+    def __init__(
+        self,
+        config: LLMConfig | None = None,
+        cache: bool = False,
+        client: Any = None,
+        max_tokens: int = 16384,
+    ) -> None:
+        super().__init__(config, cache=cache, max_tokens=max_tokens)
+        cfg = config or LLMConfig()
+        self.client: AsyncOpenAI = client or AsyncOpenAI(
+            api_key=cfg.api_key, base_url=cfg.base_url
+        )
+
+    async def _create_completion(
+        self,
+        model: str,
+        messages: list[Any],
+        temperature: float | None,
+        max_tokens: int,
+        response_model: type[BaseModel] | None = None,
+    ) -> Any:
+        """Plain JSON completion via chat.completions (json_object mode)."""
+        return await self.client.chat.completions.create(
+            model=model,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            response_format={"type": "json_object"},
+        )
+
+    async def _create_structured_completion(
+        self,
+        model: str,
+        messages: list[Any],
+        temperature: float | None,
+        max_tokens: int,
+        response_model: type[BaseModel],
+        reasoning: str | None = None,
+        verbosity: str | None = None,
+    ) -> Any:
+        """Structured completion via chat.completions.
+
+        Tries strict json_schema first; on endpoints that don't support it,
+        falls back to json_object with the schema embedded in a system message.
+        """
+        schema = response_model.model_json_schema()
+        try:
+            return await self.client.chat.completions.create(
+                model=model,
+                messages=messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": response_model.__name__,
+                        "schema": schema,
+                        "strict": True,
+                    },
+                },
+            )
+        except Exception:
+            # Fallback: many relays only support json_object. Inject the schema
+            # into the prompt so the model still emits conforming JSON.
+            schema_hint = {
+                "role": "system",
+                "content": (
+                    "You must reply with a single JSON object that conforms "
+                    f"exactly to this JSON schema:\n{json.dumps(schema)}"
+                ),
+            }
+            return await self.client.chat.completions.create(
+                model=model,
+                messages=[schema_hint, *messages],
+                temperature=temperature,
+                max_tokens=max_tokens,
+                response_format={"type": "json_object"},
+            )
+
+    def _handle_structured_response(self, response: Any) -> tuple[dict[str, Any], int, int]:
+        """Parse a chat.completions response (overrides the Responses-API parser).
+
+        The base implementation reads response.output_text (Responses API). Our
+        responses are chat.completions-shaped, so read choices[0].message.content
+        and usage.prompt_tokens/completion_tokens instead.
+        """
+        content = response.choices[0].message.content or ""
+        input_tokens = 0
+        output_tokens = 0
+        if getattr(response, "usage", None):
+            input_tokens = getattr(response.usage, "prompt_tokens", 0) or 0
+            output_tokens = getattr(response.usage, "completion_tokens", 0) or 0
+        if not content:
+            raise Exception(f"Invalid response from LLM: {response}")
+        return json.loads(content), input_tokens, output_tokens
