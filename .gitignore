@@ -1,0 +1,19 @@
+# --- secrets & local data: NEVER commit ---
+.env
+*.kuzu
+*.kuzu.wal
+data/
+*.kuzu/
+
+# --- python ---
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.uv/
+uv.lock
+
+# --- editor/os ---
+.DS_Store
+.idea/
+.vscode/
