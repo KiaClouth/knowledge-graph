@@ -1,10 +1,10 @@
 [project]
 name = "knowledge-graph"
 version = "0.1.0"
-description = "Personal knowledge/capability graph maintained via conversations, built on Graphiti + Kùzu"
+description = "Personal knowledge/capability graph maintained via conversations, built on Graphiti + Neo4j"
 requires-python = ">=3.12"
 dependencies = [
-    "graphiti-core[kuzu]>=0.29.2",
+    "graphiti-core>=0.29.2",
     "python-dotenv>=1.0.0",
 ]
 
