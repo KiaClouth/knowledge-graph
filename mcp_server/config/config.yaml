@@ -1,4 +1,13 @@
 # Graphiti MCP Server Configuration
+#
+# ⚠️ 本文件是上游(getzep/graphiti)自带的**通用 demo 模板**:默认本体是官方 10
+#    实体(Preference/Requirement/...),数据库默认 falkordb。**本项目并不用它。**
+#    本项目的实际配置在同目录 `config.kg.yaml`(锁定 7 实体/7 边 + Neo4j + dasuapi)。
+#    远程部署经 CONFIG_PATH / --config 指向 config.kg.yaml。保留此文件仅为:
+#      (a) 作为 --config 未指定且无 CONFIG_PATH 时的最后回退;
+#      (b) docker/ 下若干上游示例 compose 仍挂载它。
+#    若要改本项目行为,请改 config.kg.yaml,不要改这里。
+#
 # This file supports environment variable expansion using ${VAR_NAME} or ${VAR_NAME:default_value}
 #
 # IMPORTANT: Set SEMAPHORE_LIMIT environment variable to control episode processing concurrency

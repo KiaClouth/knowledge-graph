@@ -1103,14 +1103,20 @@ async def initialize_server() -> ServerConfig:
         description='Run the Graphiti MCP server with YAML configuration support'
     )
 
-    # Configuration file argument
-    # Default to config/config.yaml relative to the mcp_server directory
-    default_config = Path(__file__).parent.parent / 'config' / 'config.yaml'
+    # Configuration file argument.
+    # default is None (NOT the packaged config path) on purpose: a truthy default
+    # made `if args.config` below always true, so it unconditionally clobbered a
+    # CONFIG_PATH passed via the environment and silently fell back to the demo
+    # config.yaml (default ontology + falkordb). Resolution order is now:
+    #   explicit --config  >  CONFIG_PATH env  >  packaged config/config.yaml
     parser.add_argument(
         '--config',
         type=Path,
-        default=default_config,
-        help='Path to YAML configuration file (default: config/config.yaml)',
+        default=None,
+        help=(
+            'Path to YAML configuration file. If omitted, uses the CONFIG_PATH '
+            'environment variable, else config/config.yaml.'
+        ),
     )
 
     # Transport arguments
@@ -1173,9 +1179,17 @@ async def initialize_server() -> ServerConfig:
 
     args = parser.parse_args()
 
-    # Set config path in environment for the settings to pick up
-    if args.config:
+    # Resolve the config path with a clear precedence and expose it via
+    # CONFIG_PATH for the pydantic settings source to read.
+    #   1. explicit --config on the command line
+    #   2. CONFIG_PATH already in the environment (e.g. from docker-compose)
+    #   3. the packaged config/config.yaml as a last resort
+    if args.config is not None:
         os.environ['CONFIG_PATH'] = str(args.config)
+    elif not os.environ.get('CONFIG_PATH'):
+        os.environ['CONFIG_PATH'] = str(
+            Path(__file__).parent.parent / 'config' / 'config.yaml'
+        )
 
     # Load configuration with environment variables and YAML
     config = GraphitiConfig()
