@@ -12,8 +12,10 @@
 
 server:
   transport: "http"   # http(推荐) / stdio / sse(废弃)
-  host: "127.0.0.1"   # 本地跑通阶段只绑回环; 远程部署再改 0.0.0.0 + 反代鉴权
-  port: 8000
+  # 本地默认只绑回环; Docker 里由 compose 设 MCP_SERVER_HOST=0.0.0.0(容器内需
+  # 绑 0.0.0.0 才能被宿主端口映射转发到, 对外仍只经 nginx + Bearer 鉴权)。
+  host: "${MCP_SERVER_HOST:127.0.0.1}"
+  port: ${MCP_SERVER_PORT:8000}
 
 llm:
   provider: "openai"           # 走 openai 兼容路径; base_url 非官方 → 工厂改用

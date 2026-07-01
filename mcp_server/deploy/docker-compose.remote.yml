@@ -1,0 +1,74 @@
+# Graphiti MCP Server — 远程部署(Neo4j 后端,全 Docker)
+#
+# 安全边界(★):
+#   - Neo4j 与 MCP 都只把端口绑到 127.0.0.1,公网碰不到。
+#   - MCP↔Neo4j 走 compose 内网(服务名 neo4j),不经宿主端口。
+#   - 唯一对外入口是宿主机 nginx(kg.kiaclouth.com → 127.0.0.1:8000 + Bearer 鉴权)。
+#   - 宿主 127.0.0.1:8000 / 127.0.0.1:7687 仅供本机 nginx 转发 / 调试。
+#
+# 用法(在 mcp_server/ 目录):
+#   docker compose -f deploy/docker-compose.remote.yml --env-file deploy/.env up -d --build
+# 变量从 deploy/.env 读(见 deploy/.env.example)。
+
+name: kg-mcp
+
+services:
+  neo4j:
+    image: neo4j:5-community
+    container_name: kg-neo4j
+    restart: unless-stopped
+    ports:
+      # 只绑回环:数据库绝不直接对公网。宿主本机可 cypher-shell 调试。
+      - "127.0.0.1:7687:7687"   # Bolt
+      - "127.0.0.1:7474:7474"   # HTTP browser(可选,调试用)
+    environment:
+      NEO4J_AUTH: "${NEO4J_USER:-neo4j}/${NEO4J_PASSWORD:?must set NEO4J_PASSWORD}"
+      NEO4J_server_memory_heap_initial__size: "512m"
+      NEO4J_server_memory_heap_max__size: "1G"
+      NEO4J_server_memory_pagecache_size: "512m"
+    volumes:
+      - kg_neo4j_data:/data
+      - kg_neo4j_logs:/logs
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:7474 >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
+  graphiti-mcp:
+    container_name: kg-mcp
+    restart: unless-stopped
+    build:
+      context: ..                       # 构建上下文 = mcp_server/
+      dockerfile: deploy/Dockerfile.kg
+    depends_on:
+      neo4j:
+        condition: service_healthy
+    environment:
+      # ── 图库:走 compose 内网服务名,不经宿主端口 ──
+      NEO4J_URI: "bolt://neo4j:7687"
+      NEO4J_USER: "${NEO4J_USER:-neo4j}"
+      NEO4J_PASSWORD: "${NEO4J_PASSWORD:?must set NEO4J_PASSWORD}"
+      NEO4J_DATABASE: "neo4j"
+      # ── 对话 LLM(dasuapi)──
+      OPENAI_API_KEY: "${OPENAI_API_KEY:?must set OPENAI_API_KEY}"
+      OPENAI_BASE_URL: "${OPENAI_BASE_URL:-https://dasuapi.com/v1}"
+      OPENAI_MODEL: "${OPENAI_MODEL:-gpt-5.4}"
+      # ── 嵌入(智谱 embedding-3, 2048 维)──
+      EMBEDDER_API_KEY: "${EMBEDDER_API_KEY:?must set EMBEDDER_API_KEY}"
+      EMBEDDER_BASE_URL: "${EMBEDDER_BASE_URL:-https://open.bigmodel.cn/api/paas/v4}"
+      EMBEDDER_MODEL: "${EMBEDDER_MODEL:-embedding-3}"
+      EMBEDDER_DIM: "${EMBEDDER_DIM:-2048}"
+      # ── 分区 / 并发 ──
+      GRAPHITI_GROUP_ID: "${GRAPHITI_GROUP_ID:-draft}"
+      SEMAPHORE_LIMIT: "${SEMAPHORE_LIMIT:-6}"
+      # server 读这个找配置(容器内路径)
+      CONFIG_PATH: "/app/mcp/config/config.kg.yaml"
+    ports:
+      # 只绑回环:唯一对外入口是宿主 nginx 反代 + Bearer 鉴权。
+      - "127.0.0.1:8000:8000"
+
+volumes:
+  kg_neo4j_data:
+  kg_neo4j_logs:

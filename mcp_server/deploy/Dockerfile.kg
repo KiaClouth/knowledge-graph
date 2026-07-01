@@ -1,0 +1,57 @@
+# syntax=docker/dockerfile:1
+# Graphiti MCP Server — 本项目定制镜像(Neo4j 后端 + 我们的 strict/Sanitizing 补丁)
+#
+# 与公式 docker/Dockerfile.standalone 的区别:
+#   - graphiti-core 钉到实测通过的 0.29.2(公式默认 0.29.1)。
+#   - 不 COPY uv.lock:本仓库把 uv.lock 列入 .gitignore,服务器 git clone 后没有它,
+#     故这里只 COPY pyproject.toml 再 `uv lock` 现生成。
+#   - src/ 已含我们 vendor 的 src/kg/(ChatCompletionsClient + SanitizingNeo4jDriver),
+#     factories.py / graphiti_mcp_server.py 会 import 到它们,镜像自包含。
+#
+# 构建上下文 = mcp_server/ (见 docker-compose.remote.yml 的 build.context)。
+
+FROM python:3.11-slim-bookworm
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# uv
+ADD https://astral.sh/uv/install.sh /uv-installer.sh
+RUN sh /uv-installer.sh && rm /uv-installer.sh
+ENV PATH="/root/.local/bin:${PATH}"
+
+ENV UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy \
+    UV_PYTHON_DOWNLOADS=never \
+    MCP_SERVER_HOST="0.0.0.0" \
+    PYTHONUNBUFFERED=1
+
+WORKDIR /app/mcp
+
+# 钉到实测通过的 graphiti-core 版本。neo4j 驱动在 base 包内,无需 falkordb extra。
+ARG GRAPHITI_CORE_VERSION=0.29.2
+
+# 只拷 pyproject(无 uv.lock),把 falkordb extra 去掉并钉版本,再现生成锁文件。
+COPY pyproject.toml ./
+RUN sed -i "s/graphiti-core\[falkordb\][>=]\+[0-9]\+\.[0-9]\+\.[0-9]\+/graphiti-core==${GRAPHITI_CORE_VERSION}/" pyproject.toml && \
+    echo "locking deps against PyPI graphiti-core==${GRAPHITI_CORE_VERSION}..." && \
+    uv lock
+
+# 装依赖(排除 dev 组)。不装 providers/azure extra:本项目只用 openai 兼容端点。
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --no-group dev
+
+# 应用代码(src/ 含 vendored src/kg/ 补丁)
+COPY main.py ./
+COPY src/ ./src/
+COPY config/ ./config/
+
+EXPOSE 8000
+
+# /health 是公式 server 的 custom_route(graphiti_mcp_server.py:1092)
+HEALTHCHECK --interval=10s --timeout=5s --start-period=20s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+CMD ["uv", "run", "--no-sync", "main.py"]
