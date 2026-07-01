@@ -5,6 +5,7 @@ description = "Personal knowledge/capability graph maintained via conversations,
 requires-python = ">=3.12"
 dependencies = [
     "graphiti-core>=0.29.2",
+    "mcp>=1.28.1",
     "python-dotenv>=1.0.0",
 ]
 
