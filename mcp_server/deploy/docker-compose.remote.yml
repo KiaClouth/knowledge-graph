@@ -39,6 +39,7 @@ services:
   graphiti-mcp:
     container_name: kg-mcp
     restart: unless-stopped
+    image: kg-mcp:latest          # 固定镜像名,便于 save/load 离线搬运(不随项目名漂移)
     build:
       context: ..                       # 构建上下文 = mcp_server/
       dockerfile: deploy/Dockerfile.kg
