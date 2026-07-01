@@ -1,0 +1,135 @@
+# Graphiti MCP Server —— 本项目配置(个人知识/能力图谱)
+#
+# 环境变量用 ${VAR} 或 ${VAR:default} 展开(schema.py 的 YamlSettingsSource 在
+# 加载时读 os.environ)。变量名刻意与仓库根 .env 一致,避免重复维护密钥:
+#   OPENAI_API_KEY / OPENAI_BASE_URL / OPENAI_MODEL   —— 对话(dasuapi gpt-5.4)
+#   EMBEDDER_API_KEY / EMBEDDER_BASE_URL / EMBEDDER_MODEL / EMBEDDER_DIM —— 嵌入(智谱)
+#   NEO4J_URI / NEO4J_USER / NEO4J_PASSWORD           —— 图库
+# 启动方式见 mcp_server/README 或用根目录脚本(会先 load .env 再起 server)。
+#
+# ⚠️ 并发: SEMAPHORE_LIMIT 环境变量控制 episode 处理并发, 默认 10。dasuapi 若限流
+# 可调低。
+
+server:
+  transport: "http"   # http(推荐) / stdio / sse(废弃)
+  host: "127.0.0.1"   # 本地跑通阶段只绑回环; 远程部署再改 0.0.0.0 + 反代鉴权
+  port: 8000
+
+llm:
+  provider: "openai"           # 走 openai 兼容路径; base_url 非官方 → 工厂改用
+                               # 我们的 ChatCompletionsClient(strict=True)
+  model: ${OPENAI_MODEL:gpt-5.4}
+  max_tokens: 16384
+  providers:
+    openai:
+      api_key: ${OPENAI_API_KEY}
+      api_url: ${OPENAI_BASE_URL:https://dasuapi.com/v1}
+
+embedder:
+  provider: "openai"           # 智谱 embedding-3 走 openai 兼容嵌入接口
+  model: ${EMBEDDER_MODEL:embedding-3}
+  dimensions: ${EMBEDDER_DIM:2048}   # 智谱 embedding-3 = 2048; 首次写入固化进 schema
+  providers:
+    openai:
+      api_key: ${EMBEDDER_API_KEY}
+      api_url: ${EMBEDDER_BASE_URL:https://open.bigmodel.cn/api/paas/v4}
+
+database:
+  provider: "neo4j"            # ⚠️ 覆盖公式默认的 falkordb
+  providers:
+    neo4j:
+      uri: ${NEO4J_URI:bolt://localhost:7687}
+      username: ${NEO4J_USER:neo4j}
+      password: ${NEO4J_PASSWORD:localdev_change_me}
+      database: ${NEO4J_DATABASE:neo4j}
+
+graphiti:
+  group_id: ${GRAPHITI_GROUP_ID:draft}   # 自动摄入落 draft 分区; 人工晋升 canonical
+  user_id: ${USER_ID:mcp_user}
+
+  # 锁定本体的 7 实体。name 匹配 models/entity_types.py 注册的富模型
+  # (带属性 + 抽取指令 docstring)。description 仅在无注册模型时作兜底。
+  entity_types:
+    - name: "Person"
+      description: "A human; primarily the graph owner (the 'User' speaker in conversational input)."
+    - name: "Skill"
+      description: "An ability the person can actively DO/perform (can-do), as opposed to Concept."
+    - name: "Concept"
+      description: "A knowledge area the person UNDERSTANDS (knows-about), as opposed to Skill."
+    - name: "Technology"
+      description: "A concrete tool, language, framework, library, platform, or product."
+    - name: "Project"
+      description: "A concrete piece of work or product the person built or contributed to."
+    - name: "Experience"
+      description: "A role, job, engagement, or sustained body of work over a time span."
+    - name: "Organization"
+      description: "A company, team, school, or institution."
+
+  # 锁定本体的 7 边。name 匹配 models/edge_types.py 注册的富模型(含 confidence 等)。
+  edge_types:
+    - name: "HAS_SKILL"
+      description: "The person possesses/can perform this skill."
+    - name: "UNDERSTANDS"
+      description: "The person comprehends this concept/knowledge area."
+    - name: "USES"
+      description: "The person (or a project) uses this technology."
+    - name: "DEMONSTRATES"
+      description: "A project or experience provides evidence for a skill or concept."
+    - name: "BUILT_WITH"
+      description: "A project was built with this technology."
+    - name: "PART_OF"
+      description: "A project belongs to an experience or organization."
+    - name: "RELATES_TO"
+      description: "A generic association between two technologies/concepts."
+
+  # 约束哪种边可连哪对实体(镜像 src/kg/ontology.py 的 EDGE_TYPE_MAP)。
+  # 'Entity' 为通配; 未列出的实体对回落到通配, 故这里约束的是"词汇表"而非硬拒。
+  edge_type_map:
+    - source: "Person"
+      target: "Skill"
+      edge_types: ["HAS_SKILL"]
+    - source: "Person"
+      target: "Concept"
+      edge_types: ["UNDERSTANDS"]
+    - source: "Person"
+      target: "Technology"
+      edge_types: ["USES"]
+    - source: "Person"
+      target: "Project"
+      edge_types: ["DEMONSTRATES"]
+    - source: "Person"
+      target: "Experience"
+      edge_types: ["DEMONSTRATES"]
+    - source: "Project"
+      target: "Technology"
+      edge_types: ["USES", "BUILT_WITH"]
+    - source: "Project"
+      target: "Skill"
+      edge_types: ["DEMONSTRATES"]
+    - source: "Project"
+      target: "Concept"
+      edge_types: ["DEMONSTRATES"]
+    - source: "Experience"
+      target: "Skill"
+      edge_types: ["DEMONSTRATES"]
+    - source: "Experience"
+      target: "Concept"
+      edge_types: ["DEMONSTRATES"]
+    - source: "Project"
+      target: "Experience"
+      edge_types: ["PART_OF"]
+    - source: "Project"
+      target: "Organization"
+      edge_types: ["PART_OF"]
+    - source: "Experience"
+      target: "Organization"
+      edge_types: ["PART_OF"]
+    - source: "Technology"
+      target: "Concept"
+      edge_types: ["RELATES_TO"]
+    - source: "Concept"
+      target: "Concept"
+      edge_types: ["RELATES_TO"]
+    - source: "Technology"
+      target: "Technology"
+      edge_types: ["RELATES_TO"]
