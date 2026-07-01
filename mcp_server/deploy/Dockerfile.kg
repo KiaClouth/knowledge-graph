@@ -54,4 +54,9 @@ EXPOSE 8000
 HEALTHCHECK --interval=10s --timeout=5s --start-period=20s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
-CMD ["uv", "run", "--no-sync", "main.py"]
+# ★ 必须显式传 --config。graphiti_mcp_server.py 的 --config 参数有默认值
+# (config/config.yaml),且 main() 里 `if args.config: os.environ['CONFIG_PATH']=...`
+# 会无条件用该默认值覆盖掉我们经 compose environment 传入的 CONFIG_PATH。
+# 用 shell 形式引用 $CONFIG_PATH(compose 已设为 /app/mcp/config/config.kg.yaml),
+# 让 args.config = 我们的路径,那行覆盖反而设对。
+CMD ["sh", "-c", "uv run --no-sync main.py --config \"$CONFIG_PATH\""]

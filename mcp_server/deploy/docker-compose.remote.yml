@@ -66,6 +66,12 @@ services:
       SEMAPHORE_LIMIT: "${SEMAPHORE_LIMIT:-6}"
       # server 读这个找配置(容器内路径)
       CONFIG_PATH: "/app/mcp/config/config.kg.yaml"
+    # ★ 必须显式传 --config。main() 里 `--config` 有默认值 config/config.yaml,
+    # 且 `if args.config: os.environ['CONFIG_PATH']=str(args.config)` 会无条件用该
+    # 默认值覆盖掉上面经 environment 传入的 CONFIG_PATH,导致回退公式默认(falkordb)。
+    # 这里显式带上,让 args.config = 我们的路径。command 覆盖镜像 CMD,无需重打镜像。
+    # $$ 转义:compose 会先做变量插值,用 $$ 传给容器 shell 一个字面量 $CONFIG_PATH。
+    command: ["sh", "-c", "uv run --no-sync main.py --config \"$$CONFIG_PATH\""]
     ports:
       # 只绑回环:唯一对外入口是宿主 nginx 反代 + Bearer 鉴权。
       - "127.0.0.1:8000:8000"
