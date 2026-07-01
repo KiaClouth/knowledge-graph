@@ -19,11 +19,11 @@ import os
 from pathlib import Path
 
 from graphiti_core import Graphiti
-from graphiti_core.driver.neo4j_driver import Neo4jDriver
 from graphiti_core.embedder.openai import OpenAIEmbedder, OpenAIEmbedderConfig
 from graphiti_core.llm_client.config import LLMConfig
 
 from kg.chat_completions_client import ChatCompletionsClient
+from kg.sanitizing_driver import SanitizingNeo4jDriver
 
 # group_id partitions (see README): Graphiti writes here atomically.
 DRAFT_GROUP = "draft"          # fully automatic extraction lands here
@@ -39,9 +39,17 @@ DEFAULT_EMBED_MODEL = "text-embedding-3-small"
 DEFAULT_EMBED_DIM = 1536
 
 
-def make_driver() -> Neo4jDriver:
-    """Construct a Neo4jDriver from NEO4J_* env (matches docker-compose.yml)."""
-    return Neo4jDriver(
+def make_driver() -> SanitizingNeo4jDriver:
+    """Construct a driver from NEO4J_* env (matches docker-compose.yml).
+
+    Uses SanitizingNeo4jDriver (not the plain Neo4jDriver) to flatten nested-dict
+    attribute values to JSON strings at the write boundary. Constrained-decoding
+    endpoints occasionally emit nested objects for entity/edge attributes (e.g.
+    Project.status={description: ...}); Neo4j only accepts primitives/arrays, so
+    the raw driver crashes the whole ingest with CypherTypeError(Map{...}). See
+    sanitizing_driver.py.
+    """
+    return SanitizingNeo4jDriver(
         uri=os.environ.get("NEO4J_URI", DEFAULT_NEO4J_URI),
         user=os.environ.get("NEO4J_USER", DEFAULT_NEO4J_USER),
         password=os.environ.get("NEO4J_PASSWORD", DEFAULT_NEO4J_PASSWORD),
