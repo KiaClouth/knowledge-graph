@@ -1,0 +1,11 @@
+我做了一个叫托拉姆计算器（ToramCalculator）的项目。
+
+在这个项目里，我用 SolidJS 搭建了整个前端界面，依靠它的细粒度响应式系统管理状态，还用它的 store 组织了应用数据。我用 Vite 做构建，并写了虚拟模块来生成代码。
+
+为了让这个应用能离线工作，我写了 Service Worker 来接管网络请求，用 IndexedDB 和 OPFS 缓存资源，还接入了 pglite 配合 ElectricSQL，实现了本地数据库和远端的同步。
+
+我用 Node.js 写了一个 generator 脚本，它读取 Prisma Schema，自动生成数据库 DDL、Kysely 的类型定义和 Zod 的校验代码，这样我就把数据模型收敛到了单一事实来源。
+
+在界面视觉上，我用 APCA 对比度算法和 OKLCH 颜色模型计算配色，用 CIE XYZ 空间换算颜色。我搭建了一套 Design Tokens，按原子化设计（Atomic Design）组织组件，并用有限状态机（FSM）管理界面的交互状态。
+
+在游戏逻辑这块，我用 XState v5 写了复杂的状态机，管理 Actor 模型、状态转换和异步调用。我用行为树管理游戏角色的决策逻辑，还把它接到 Blockly 上做了可视化编辑。我用 Babylon.js 做了 3D 渲染，处理动画和骨骼绑定，并用 Offscreen Canvas 提升渲染性能。

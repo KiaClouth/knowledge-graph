@@ -30,10 +30,11 @@ from kg.ontology import EDGE_TYPE_MAP, EDGE_TYPES, ENTITY_TYPES  # noqa: E402
 from kg.owner import inject_owner  # noqa: E402
 
 PROBE_GROUP = "probe_owner"
+DEFAULT_SAMPLE = Path(__file__).resolve().parent.parent / "examples" / "narrative_self_intro.txt"
 
 
 async def main() -> int:
-    infile = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("/tmp/selfdesc_narrative.txt")
+    infile = Path(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_SAMPLE
     text = infile.read_text(encoding="utf-8")
     print(f"输入: {infile} ({len(text)} 字)\n")
 
