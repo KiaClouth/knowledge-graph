@@ -165,6 +165,22 @@ entity types via an edge_type_map. With no such configuration, default extractio
 When adding information, provide descriptive names and detailed content to improve search quality.
 When searching, use specific queries and consider filtering by group_id, type, or date range. The
 server requires a configured database and valid API keys for language-model operations.
+
+Ingestion quality (personal knowledge/skill graph — READ BEFORE calling add_memory):
+This graph records what its owner has done and knows. Extraction quality depends heavily on the
+SHAPE of the input (empirically verified on this deployment):
+- Use source="message" with first-person, conversational content prefixed by a FIXED speaker id,
+  e.g. "KiaClouth: I built X using Y." The speaker prefix is what makes the owner appear as a
+  Person node and produces the capability edges (USES / UNDERSTANDS / DEMONSTRATES). Plain
+  source="text" or third-person narration yields NO Person node and NO capability edges.
+- Write NARRATIVELY — "I built <project> with <tech> and it deepened my understanding of
+  <concept>" — NOT as a capability list ("I'm proficient in X"). Narrative input produces
+  BUILT_WITH / DEMONSTRATES edges with meaningful confidence scores; bare listings collapse into
+  low-value RELATES_TO edges with no confidence.
+- Default group_id="draft" for automatic ingestion; a human later promotes vetted content to
+  "canonical". Never write to canonical directly.
+- Keep the speaker id STABLE across every episode (currently "KiaClouth"). A changed speaker spawns
+  a separate Person node that will NOT merge with the existing owner node.
 """
 
 # MCP server instance
@@ -387,6 +403,13 @@ async def add_memory(
                                - 'text': For plain text content (default)
                                - 'json': For structured data
                                - 'message': For conversation-style content
+                               For this personal knowledge/skill graph, PREFER 'message' with
+                               first-person, narrative content prefixed by a fixed speaker id
+                               (e.g. "KiaClouth: I built X with Y"). This is what produces the
+                               owner Person node plus capability edges (USES/UNDERSTANDS/
+                               DEMONSTRATES). 'text' or third-person narration yields no Person
+                               node and no capability edges. See the server instructions
+                               ("Ingestion quality") for the full rationale.
         source_description (str, optional): Description of the source
         uuid (str, optional): Optional UUID for the episode
         reference_time (str, optional): ISO-8601 timestamp for when the described events occurred
@@ -407,6 +430,18 @@ async def add_memory(
                                  order episodes within the saga.
 
     Examples:
+        # Ingesting a self-report (PREFERRED shape for this graph): first-person,
+        # narrative, source="message", fixed speaker id, default group_id="draft".
+        add_memory(
+            name="rgrep CLI project",
+            episode_body="KiaClouth: I built a CLI tool called rgrep in Rust, a high-performance "
+                         "text searcher like ripgrep. I used clap for arg parsing and rayon for "
+                         "parallel search. Building it deepened my grasp of concurrency and memory safety.",
+            source="message",
+            source_description="self report",
+            group_id="draft"
+        )
+
         # Adding plain text content
         add_memory(
             name="Company News",
